@@ -244,13 +244,17 @@ def search(ctx, tree, semantic):
     if not tree:
         if app.config["TREE"] == TREE_MULTI:
             raise ValueError("`tree` is required when multi-tree support is enabled.")
-        # needed for backwards compatibility!
-        dbmgr = WebDbManager(
-            name=app.config["TREE"],
-            create_if_missing=False,
-            ignore_lock=app.config["IGNORE_DB_LOCK"],
-        )
-        tree = dbmgr.dirname
+        if app.config.get("TREE_ID"):
+            # TREE_ID takes precedence: use dirname directly
+            tree = app.config["TREE_ID"]
+        else:
+            # needed for backwards compatibility!
+            dbmgr = WebDbManager(
+                name=app.config["TREE"],
+                create_if_missing=False,
+                ignore_lock=app.config["IGNORE_DB_LOCK"],
+            )
+            tree = dbmgr.dirname
     with app.app_context():
         ctx.obj["db_manager"] = get_db_manager(tree=tree)
         if semantic:
@@ -346,9 +350,13 @@ def grampsdb(ctx, tree):
     if not tree:
         if app.config["TREE"] == TREE_MULTI:
             raise ValueError("`tree` is required when multi-tree support is enabled.")
-        # needed for backwards compatibility!
-        dbmgr = WebDbManager(name=app.config["TREE"], create_if_missing=False)
-        tree = dbmgr.dirname
+        if app.config.get("TREE_ID"):
+            # TREE_ID takes precedence: use dirname directly
+            tree = app.config["TREE_ID"]
+        else:
+            # needed for backwards compatibility!
+            dbmgr = WebDbManager(name=app.config["TREE"], create_if_missing=False)
+            tree = dbmgr.dirname
     with app.app_context():
         ctx.obj["db_manager"] = get_db_manager(tree=tree)
 
@@ -371,6 +379,83 @@ def migrate_gramps_undodb(ctx):
         migrate_undodb(db_handle.undodb)
     finally:
         close_db(db_handle)
+
+
+@cli.group("profile", help="Profile API endpoint performance.")
+def profile():
+    """Profile endpoint performance."""
+    pass
+
+
+@profile.command("run")
+@click.option(
+    "--tree",
+    required=True,
+    help="Tree ID to profile (required for JWT token)",
+)
+@click.option(
+    "--username",
+    required=True,
+    help="Username for authentication",
+)
+@click.option(
+    "--password",
+    default=None,
+    help="Password for authentication (will be prompted if not provided)",
+)
+@click.option(
+    "--url",
+    default=None,
+    help="Server URL for remote profiling (e.g., http://localhost:5555). If not set, uses test client.",
+)
+@click.option(
+    "--iterations",
+    default=10,
+    type=int,
+    help="Number of iterations per endpoint (default: 10)",
+)
+@click.option(
+    "--warmup",
+    default=2,
+    type=int,
+    help="Number of warmup runs before profiling (default: 2)",
+)
+@click.option(
+    "--output",
+    default=None,
+    help="Output JSON file path (optional)",
+)
+@click.pass_context
+def profile_run(ctx, tree, username, password, url, iterations, warmup, output):
+    """Profile API endpoint performance.
+
+    This command measures the response time of typical API endpoints to help
+    identify performance bottlenecks. Caching is automatically disabled for
+    accurate measurements.
+
+    Examples:
+
+    \b
+    # Profile using test client (local, fast) - will prompt for password
+    python3 -m gramps_webapi profile run --tree my_tree --username admin
+
+    \b
+    # Profile a running server (realistic, includes network)
+    python3 -m gramps_webapi profile run --tree my_tree --username admin \\
+        --url http://localhost:5555
+
+    \b
+    # Save results to JSON file
+    python3 -m gramps_webapi profile run --tree my_tree --username admin \\
+        --output results.json
+    """
+    from .profiler import run_profiler
+
+    # Prompt for password if not provided (more secure than command-line argument)
+    if password is None:
+        password = click.prompt("Password", hide_input=True)
+
+    run_profiler(tree, username, password, url, iterations, warmup, output)
 
 
 if __name__ == "__main__":

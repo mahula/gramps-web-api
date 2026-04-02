@@ -28,7 +28,7 @@ from typing import Any, Callable, Dict, List, Optional, Union
 
 from celery import Task, shared_task
 from celery.result import AsyncResult
-from flask import current_app
+from flask import current_app, jsonify
 from gramps.gen.db import DbTxn
 from gramps.gen.db.base import DbReadBase
 from gramps.gen.errors import HandleError
@@ -87,7 +87,9 @@ def make_task_response(task: AsyncResult):
     """Make a 202 response with the location of the task status endpoint."""
     url = f"/api/tasks/{task.id}"
     payload = {"task": {"href": url, "id": task.id}}
-    return payload, HTTPStatus.ACCEPTED
+    response = jsonify(payload)
+    response.status_code = HTTPStatus.ACCEPTED
+    return response
 
 
 def clip_progress(x: float) -> float:
@@ -236,12 +238,12 @@ def import_file(
     self, tree: str, user_id: str, file_name: str, extension: str, delete: bool = True
 ):
     """Import a file."""
-    object_counts = dry_run_import(file_name=file_name)
+    object_counts = dry_run_import(file_name=file_name, extension=extension)
     if object_counts is None:
         raise ValueError(f"Failed importing {extension} file")
     check_quota_people(to_add=object_counts["people"], tree=tree, user_id=user_id)
     db_handle = get_db_outside_request(
-        tree=tree, view_private=True, readonly=True, user_id=user_id
+        tree=tree, view_private=True, readonly=False, user_id=user_id
     )
     try:
         run_import(

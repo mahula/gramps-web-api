@@ -22,7 +22,9 @@
 
 from __future__ import annotations
 
+import gzip
 import os
+import re
 from hashlib import sha256
 from http import HTTPStatus
 from typing import Any, Literal, Optional, Union, cast
@@ -37,7 +39,7 @@ from gramps.gen.const import GRAMPS_LOCALE as glocale
 from gramps.gen.db import KEY_TO_CLASS_MAP, DbTxn
 from gramps.gen.db.base import DbReadBase, DbWriteBase
 from gramps.gen.db.dbconst import TXNADD, TXNDEL, TXNUPD
-from gramps.gen.db.utils import import_as_dict
+from gramps.gen.db.utils import make_database
 from gramps.gen.display.name import NameDisplay
 from gramps.gen.display.place import PlaceDisplay
 from gramps.gen.errors import HandleError
@@ -72,7 +74,9 @@ from gramps.gen.utils.grampslocale import GrampsLocale
 from gramps.gen.utils.id import create_id
 from gramps.gen.utils.place import conv_lat_lon
 
-from ...const import DISABLED_IMPORTERS, SEX_FEMALE, SEX_MALE, SEX_UNKNOWN
+import gramps_gedcom7
+
+from ...const import DISABLED_IMPORTERS, SEX_FEMALE, SEX_MALE, SEX_OTHER, SEX_UNKNOWN
 from ...types import FilenameOrPath, Handle, TransactionJson
 from ..media import get_media_handler
 from ..util import (
@@ -145,6 +149,8 @@ def get_sex_profile(person: Person) -> str:
         return SEX_MALE
     if person.gender == person.FEMALE:
         return SEX_FEMALE
+    if person.gender == person.OTHER:
+        return SEX_OTHER
     return SEX_UNKNOWN
 
 
@@ -258,6 +264,7 @@ def get_event_profile_for_object(
     locale: GrampsLocale = glocale,
     role: Optional[str] = None,
     name_format: Optional[str] = None,
+    precision: int = 3,
 ) -> dict:
     """Get event profile given an Event."""
     result = {
@@ -283,7 +290,7 @@ def get_event_profile_for_object(
     if base_event is not None:
         result[label] = (
             Span(base_event.date, event.date)
-            .format(precision=3, dlocale=locale)
+            .format(precision=precision, dlocale=locale)
             .strip("()")
         )
     return result
@@ -315,6 +322,7 @@ def get_event_profile_for_handle(
     locale: GrampsLocale = glocale,
     role: Optional[str] = None,
     name_format: Optional[str] = None,
+    precision: int = 3,
 ) -> dict:
     """Get event profile given a handle."""
     try:
@@ -332,6 +340,7 @@ def get_event_profile_for_handle(
         locale=locale,
         role=role,
         name_format=name_format,
+        precision=precision,
     )
 
 
@@ -526,7 +535,8 @@ def get_person_profile_for_object(
     args: list,
     locale: GrampsLocale = glocale,
     name_format: str | None = None,
-) -> Person:
+    precision: int = 3,
+) -> dict[str, Any]:
     """Get person profile given a Person."""
     options = []
     if "all" in args or "ratings" in args:
@@ -546,7 +556,7 @@ def get_person_profile_for_object(
             if death_event is not None:
                 death["age"] = (
                     Span(birth_event.date, death_event.date)
-                    .format(precision=3, dlocale=locale)
+                    .format(precision=precision, dlocale=locale)
                     .strip("()")
                 )
     name_displayer = NameDisplay(xlocale=locale)
@@ -584,6 +594,7 @@ def get_person_profile_for_object(
                 locale=locale,
                 role=locale.translation.sgettext(event_ref.get_role().xml_str()),
                 name_format=name_format,
+                precision=precision,
             )
             for event_ref in person.event_ref_list
         ]
@@ -595,6 +606,7 @@ def get_person_profile_for_object(
             options,
             locale=locale,
             name_format=name_format,
+            precision=precision,
         )
         profile["other_parent_families"] = []
         for handle in person.parent_family_list:
@@ -606,11 +618,17 @@ def get_person_profile_for_object(
                         options,
                         locale=locale,
                         name_format=name_format,
+                        precision=precision,
                     )
                 )
         profile["families"] = [
             get_family_profile_for_handle(
-                db_handle, handle, options, locale=locale, name_format=name_format
+                db_handle,
+                handle,
+                options,
+                locale=locale,
+                name_format=name_format,
+                precision=precision,
             )
             for handle in person.family_list
         ]
@@ -623,7 +641,8 @@ def get_person_profile_for_handle(
     args: list,
     locale: GrampsLocale = glocale,
     name_format: str | None = None,
-) -> Union[Person, dict]:
+    precision: int = 3,
+) -> dict[str, Any]:
     """Get person profile given a handle."""
     try:
         obj = db_handle.get_person_from_handle(handle)
@@ -632,7 +651,12 @@ def get_person_profile_for_handle(
     except HandleError:
         return {}
     return get_person_profile_for_object(
-        db_handle, obj, args, locale=locale, name_format=name_format
+        db_handle,
+        obj,
+        args,
+        locale=locale,
+        name_format=name_format,
+        precision=precision,
     )
 
 
@@ -642,7 +666,8 @@ def get_family_profile_for_object(
     args: list[str],
     locale: GrampsLocale = glocale,
     name_format: Optional[str] = None,
-) -> Family:
+    precision: int = 3,
+) -> dict[str, Any]:
     """Get family profile given a Family."""
     options = []
     if "all" in args or "ratings" in args:
@@ -661,7 +686,7 @@ def get_family_profile_for_object(
             if divorce_event is not None:
                 divorce["span"] = (
                     Span(marriage_event.date, divorce_event.date)
-                    .format(precision=3, dlocale=locale)
+                    .format(precision=precision, dlocale=locale)
                     .strip("()")
                 )
     if "all" in args or "age" in args:
@@ -675,6 +700,7 @@ def get_family_profile_for_object(
             options,
             locale=locale,
             name_format=name_format,
+            precision=precision,
         ),
         "mother": get_person_profile_for_handle(
             db_handle,
@@ -682,6 +708,7 @@ def get_family_profile_for_object(
             options,
             locale=locale,
             name_format=name_format,
+            precision=precision,
         ),
         "relationship": locale.translation.sgettext(family.type.xml_str()),
         "marriage": marriage,
@@ -693,6 +720,7 @@ def get_family_profile_for_object(
                 options,
                 locale=locale,
                 name_format=name_format,
+                precision=precision,
             )
             for child_ref in family.child_ref_list
         ],
@@ -718,6 +746,7 @@ def get_family_profile_for_object(
                 label="span",
                 locale=locale,
                 name_format=name_format,
+                precision=precision,
             )
             for event_ref in family.event_ref_list
         ]
@@ -730,7 +759,8 @@ def get_family_profile_for_handle(
     args: list,
     locale: GrampsLocale = glocale,
     name_format: Optional[str] = None,
-) -> Union[Family, dict]:
+    precision: int = 3,
+) -> dict[str, Any]:
     """Get family profile given a handle."""
     try:
         obj = db_handle.get_family_from_handle(handle)
@@ -739,7 +769,12 @@ def get_family_profile_for_handle(
     except HandleError:
         return {}
     return get_family_profile_for_object(
-        db_handle, obj, args, locale=locale, name_format=name_format
+        db_handle,
+        obj,
+        args,
+        locale=locale,
+        name_format=name_format,
+        precision=precision,
     )
 
 
@@ -1073,6 +1108,19 @@ def validate_object_dict(obj_dict: dict[str, Any]) -> bool:
     except (KeyError, AttributeError, TypeError):
         return False
     schema = obj_cls.get_schema()
+
+    # Gramps 5.2 added Person.OTHER = 3, but the JSON schema still caps gender
+    # at 2. Patch the schema to allow the actual maximum value.
+    # This patch can be removed once https://github.com/gramps-project/gramps/pull/2213
+    # is merged and a new Gramps version is released.
+    other = getattr(obj_cls, "OTHER", None)
+    if (
+        other is not None
+        and schema.get("properties", {}).get("gender", {}).get("maximum") is not None
+        and other > schema["properties"]["gender"]["maximum"]
+    ):
+        schema["properties"]["gender"]["maximum"] = other
+
     obj_dict_fixed = {k: v for k, v in obj_dict.items() if k != "complete"}
     try:
         jsonschema.validate(obj_dict_fixed, schema)
@@ -1418,14 +1466,106 @@ def get_importers(extension: str | None = None):
     return importers
 
 
+def detect_gedcom_major_version(path: str) -> int:
+    """Detect the GEDCOM version from a GEDCOM file.
+
+    Args:
+        path: Path to the GEDCOM file.
+
+    Returns:
+        The major version number (e.g., 5 or 7). Returns 0 if not found.
+
+    This function parses the GEDCOM file header looking for the VERS tag
+    within the HEAD section. It uses latin-1 encoding which is compatible
+    with both GEDCOM 5.x (ANSEL) and GEDCOM 7.x (UTF-8) files.
+    """
+    with open(path, encoding="latin-1") as f:
+        in_head = False
+        for line in f:
+            parts = line.strip().split(maxsplit=2)
+            if len(parts) < 2:
+                continue
+
+            level, tag = parts[0], parts[1]
+
+            if level == "0":
+                if tag == "HEAD":
+                    in_head = True
+                elif in_head:
+                    break
+
+            elif in_head and tag == "VERS" and len(parts) == 3:
+                version = parts[2]
+                match = re.search(r"\d+", version)
+                gedcom_major_version = int(match.group()) if match else 0
+                return gedcom_major_version
+
+    return 0
+
+
+def remove_mediapath_from_gramps_xml(file_name: FilenameOrPath) -> None:
+    """Remove the <mediapath> tag from a Gramps XML file.
+
+    This function handles both compressed (.gramps with gzip) and uncompressed
+    Gramps XML files. The <mediapath> tag can cause import failures and needs
+    to be removed before import.
+
+    Args:
+        file_name: Path to the Gramps XML file.
+    """
+    # Try to read as gzipped file first
+    try:
+        with gzip.open(file_name, "rb") as f:
+            content = f.read()
+        is_compressed = True
+    except (OSError, gzip.BadGzipFile):
+        # Not gzipped or can't read as gzip: fall back to plain file
+        with open(file_name, "rb") as f:
+            content = f.read()
+        is_compressed = False
+
+    # Remove the mediapath tag using regex
+    # Match <mediapath>...</mediapath> or <mediapath/> (empty tag)
+    # The pattern handles both multiline and single-line cases
+    pattern = rb"<mediapath\s*>.*?</mediapath\s*>|<mediapath\s*/>"
+    content_modified = re.sub(pattern, b"", content, flags=re.DOTALL)
+
+    # Write back to the file
+    if is_compressed:
+        with gzip.open(file_name, "wb") as f:
+            f.write(content_modified)
+    else:
+        with open(file_name, "wb") as f:
+            f.write(content_modified)
+
+
 def run_import(
-    db_handle: DbReadBase,
+    db_handle: DbWriteBase,
     file_name: FilenameOrPath,
     extension: str,
     delete: bool = True,
     task: Optional[Task] = None,
 ) -> None:
     """Import a file."""
+    if extension.lower() == "ged" and detect_gedcom_major_version(str(file_name)) == 7:
+        try:
+            gramps_gedcom7.import_gedcom(input_file=file_name, db=db_handle)
+        except Exception as e:
+            abort_with_message(500, f"Import failed: {e}")
+        finally:
+            if delete:
+                os.remove(file_name)
+        return
+    if extension.lower() == "gramps":
+        # Remove mediapath tag from Gramps XML files before import
+        # This is necessary because the mediapath tag can cause import failures
+        try:
+            remove_mediapath_from_gramps_xml(file_name)
+        except Exception as e:
+            # Log the error but continue with import attempt
+            current_app.logger.warning(
+                f"Failed to remove mediapath tag from {file_name}: {e}"
+            )
     plugin_manager = BasePluginManager.get_instance()
     for plugin in plugin_manager.get_import_plugins():
         if extension == plugin.get_extension():
@@ -1444,12 +1584,27 @@ def run_import(
 
 def dry_run_import(
     file_name: FilenameOrPath,
+    extension: str,
 ) -> Optional[dict[str, int]]:
     """Import a file into an in-memory database and returns object counts."""
-    db_handle: DbReadBase = import_as_dict(filename=file_name, user=User())
-    if db_handle is None:
-        return None
-    return {
+    db_handle = make_database("sqlite")
+    db_handle.load(":memory:")
+    db_handle.set_feature("skip-import-additions", True)
+    db_handle.set_prefixes(
+        config.get("preferences.iprefix"),
+        config.get("preferences.oprefix"),
+        config.get("preferences.fprefix"),
+        config.get("preferences.sprefix"),
+        config.get("preferences.cprefix"),
+        config.get("preferences.pprefix"),
+        config.get("preferences.eprefix"),
+        config.get("preferences.rprefix"),
+        config.get("preferences.nprefix"),
+    )
+    run_import(
+        db_handle=db_handle, file_name=file_name, extension=extension, delete=False
+    )
+    result = {
         "people": db_handle.get_number_of_people(),
         "families": db_handle.get_number_of_families(),
         "sources": db_handle.get_number_of_sources(),
@@ -1461,6 +1616,8 @@ def dry_run_import(
         "notes": db_handle.get_number_of_notes(),
         "tags": db_handle.get_number_of_tags(),
     }
+    db_handle.close()
+    return result
 
 
 def app_has_semantic_search() -> bool:

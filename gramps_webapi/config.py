@@ -23,11 +23,22 @@ import datetime
 from pathlib import Path
 from typing import Dict
 
+from PIL.Image import MAX_IMAGE_PIXELS
+
+from ._version import __version__
+
 
 class DefaultConfig(object):
     """Default configuration object."""
 
     PROPAGATE_EXCEPTIONS = True
+    API_TITLE = "Gramps Web API"
+    API_VERSION = __version__
+    OPENAPI_VERSION = "3.0.3"
+    OPENAPI_URL_PREFIX = "/"
+    OPENAPI_JSON_PATH = "api/openapi.json"
+    OPENAPI_SWAGGER_UI_PATH = "/api/swagger-ui"
+    OPENAPI_SWAGGER_UI_URL = "https://cdn.jsdelivr.net/npm/swagger-ui-dist/"
     SEARCH_INDEX_DIR = "indexdir"  # deprecated!
     SEARCH_INDEX_DB_URI = ""
     EMAIL_HOST = "localhost"
@@ -35,6 +46,8 @@ class DefaultConfig(object):
     EMAIL_HOST_USER = ""
     EMAIL_HOST_PASSWORD = ""
     EMAIL_USE_TLS = True
+    EMAIL_USE_SSL = None
+    EMAIL_USE_STARTTLS = None
     DEFAULT_FROM_EMAIL = ""
     BASE_URL = "http://localhost/"
     CORS_EXPOSE_HEADERS = ["X-Total-Count"]
@@ -62,6 +75,7 @@ class DefaultConfig(object):
     POSTGRES_HOST = "localhost"
     POSTGRES_PORT = "5432"
     IGNORE_DB_LOCK = False
+    TREE_ID = ""
     CELERY_CONFIG: Dict[str, str] = {}
     MEDIA_BASE_DIR = ""
     MEDIA_PREFIX_TREE = False
@@ -86,6 +100,7 @@ class DefaultConfig(object):
     OIDC_AUTO_REDIRECT = False
     OIDC_USERNAME_CLAIM = "preferred_username"
     OIDC_NAME = "OIDC"
+    PILLOW_MAX_IMAGE_PIXELS = MAX_IMAGE_PIXELS
 
 
 class DefaultConfigJWT(object):

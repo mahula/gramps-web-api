@@ -32,7 +32,7 @@ from flask import (
     render_template,
     request,
 )
-from marshmallow import EXCLUDE
+from marshmallow import EXCLUDE, Schema
 from webargs import fields
 
 from ...auth import get_name, get_permissions, get_user_details, is_tree_disabled
@@ -44,9 +44,11 @@ from ...auth.oidc import (
 from ...auth.oidc_helpers import is_oidc_enabled
 from ...auth.token_blocklist import add_jti_to_blocklist
 from ...const import TREE_MULTI
+from ..blueprint import api_blueprint
 from ..ratelimiter import limiter
-from ..util import abort_with_message, get_config, get_tree_id, use_args
+from ..util import abort_with_message, get_config, get_tree_id
 from . import Resource
+from .schemas import OIDCConfigSchema
 from .token import get_tokens
 
 logger = logging.getLogger(__name__)
@@ -59,6 +61,17 @@ def _is_development_environment(frontend_url: Optional[str]) -> bool:
     )
 
 
+class OIDCLoginQueryArgs(Schema):
+    """Query arguments for GET /oidc/login."""
+
+    provider = fields.Str(
+        required=True,
+        metadata={
+            "description": "The OIDC provider ID (e.g. 'google', 'microsoft', 'github')."
+        },
+    )
+
+
 class OIDCLoginResource(Resource):
     """Resource for initiating OIDC login flow.
 
@@ -66,12 +79,7 @@ class OIDCLoginResource(Resource):
     """
 
     @limiter.limit("5/minute")
-    @use_args(
-        {
-            "provider": fields.Str(required=True),
-        },
-        location="query",
-    )
+    @api_blueprint.arguments(OIDCLoginQueryArgs, location="query")
     def get(self, args):
         """Redirect to OIDC provider for authentication."""
         if not is_oidc_enabled():
@@ -103,6 +111,46 @@ class OIDCLoginResource(Resource):
         return authorization_url
 
 
+class OIDCCallbackQueryArgs(Schema):
+    """Query arguments for GET /oidc/callback."""
+
+    class Meta:
+        unknown = EXCLUDE
+
+    provider = fields.Str(
+        required=False,
+        metadata={
+            "description": "The OIDC provider ID (e.g. 'google', 'microsoft', 'github')."
+        },
+    )  # Optional for backwards compatibility
+    tree = fields.Str(
+        required=False,
+        metadata={"description": "Tree ID to associate with the OIDC login."},
+    )
+    code = fields.Str(
+        required=False,
+        metadata={"description": "Authorization code returned by the OIDC provider."},
+    )
+    state = fields.Str(
+        required=False,
+        metadata={"description": "State parameter returned by the OIDC provider."},
+    )
+    session_state = fields.Str(
+        required=False,
+        metadata={
+            "description": "Session state parameter returned by the OIDC provider."
+        },
+    )
+    error = fields.Str(
+        required=False,
+        metadata={"description": "Error code returned by the OIDC provider."},
+    )
+    error_description = fields.Str(
+        required=False,
+        metadata={"description": "Error description returned by the OIDC provider."},
+    )
+
+
 class OIDCCallbackResource(Resource):
     """Resource for handling OIDC callback.
 
@@ -111,21 +159,7 @@ class OIDCCallbackResource(Resource):
     """
 
     @limiter.limit("5/minute")
-    @use_args(
-        {
-            "provider": fields.Str(
-                required=False
-            ),  # Optional for backwards compatibility
-            "tree": fields.Str(required=False),
-            "code": fields.Str(required=False),
-            "state": fields.Str(required=False),
-            "session_state": fields.Str(required=False),
-            "error": fields.Str(required=False),
-            "error_description": fields.Str(required=False),
-        },
-        location="query",
-        unknown=EXCLUDE,
-    )
+    @api_blueprint.arguments(OIDCCallbackQueryArgs, location="query")
     def get(self, args, provider_id=None):
         """Handle OIDC callback and create JWT tokens.
 
@@ -158,7 +192,19 @@ class OIDCCallbackResource(Resource):
             )
 
         try:
-            token = oidc_client.authorize_access_token()
+            # Microsoft OIDC has a known issue where the issuer claim in the token
+            # may not match the issuer in the discovery document when using /common.
+            # Skip issuer validation for Microsoft to handle tenant-specific issuers.
+            # Security note: This does not allow arbitrary OIDC providers, because
+            # `provider_id` was already validated against the configured providers
+            # list via `get_available_oidc_providers()` and mapped to a preconfigured
+            # client (`gramps_<provider_id>`) before reaching this code.
+            if provider_id == "microsoft":
+                token = oidc_client.authorize_access_token(
+                    claims_options={"iss": {"essential": False}}
+                )
+            else:
+                token = oidc_client.authorize_access_token()
 
             # Handle different provider types for userinfo
             if provider_id == "github":
@@ -169,8 +215,8 @@ class OIDCCallbackResource(Resource):
                 # Standard OIDC - get userinfo from userinfo endpoint
                 userinfo = oidc_client.userinfo(token=token)
 
-        except Exception as e:
-            logger.exception(f"OIDC callback error for provider '{provider_id}'")
+        except Exception:  # pylint: disable=broad-except
+            logger.exception("OIDC callback error for provider '%s'", provider_id)
             abort_with_message(401, f"OIDC authentication failed for {provider_id}")
 
         tree = args.get("tree")
@@ -340,6 +386,7 @@ class OIDCTokenExchangeResource(Resource):
 class OIDCConfigResource(Resource):
     """Resource for getting OIDC configuration."""
 
+    @api_blueprint.response(200, OIDCConfigSchema())
     def get(self):
         """Get OIDC configuration for frontend."""
         if not is_oidc_enabled():
@@ -373,17 +420,29 @@ class OIDCConfigResource(Resource):
         }
 
 
+class OIDCLogoutQueryArgs(Schema):
+    """Query arguments for GET /oidc/logout."""
+
+    provider = fields.Str(
+        required=True,
+        metadata={
+            "description": "The OIDC provider ID (e.g. 'google', 'microsoft', 'github')."
+        },
+    )
+    id_token = fields.Str(
+        required=False,
+        metadata={"description": "ID token to use as id_token_hint for logout."},
+    )
+    post_logout_redirect_uri = fields.Str(
+        required=False,
+        metadata={"description": "URI to redirect to after logout."},
+    )
+
+
 class OIDCLogoutResource(Resource):
     """Resource for getting OIDC logout URL."""
 
-    @use_args(
-        {
-            "provider": fields.Str(required=True),
-            "id_token": fields.Str(required=False),
-            "post_logout_redirect_uri": fields.Str(required=False),
-        },
-        location="query",
-    )
+    @api_blueprint.arguments(OIDCLogoutQueryArgs, location="query")
     def get(self, args):
         """Get OIDC logout URL for the specified provider.
 
