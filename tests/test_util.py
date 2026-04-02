@@ -1,12 +1,13 @@
+from unittest.mock import MagicMock, patch
+
 import pytest
 from gramps.gen.lib.json_utils import data_to_object
 
 from gramps_webapi.api import util
+from gramps_webapi.api.resources.util import fix_object_dict
+from gramps_webapi.api.util import send_email
 from gramps_webapi.const import PRIMARY_GRAMPS_OBJECTS
 
-from unittest.mock import MagicMock, patch
-from gramps_webapi.api.util import send_email
-from gramps_webapi.api.resources.util import fix_object_dict
 
 def test_fix_object_dict_localized_event_type():
     """Test fix_object_dict with localized (German) event type string."""
