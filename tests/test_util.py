@@ -1,6 +1,7 @@
 from unittest.mock import MagicMock, patch
 
 import pytest
+from gramps.gen.lib import EventType
 from gramps.gen.lib.json_utils import data_to_object
 
 from gramps_webapi.api import util
@@ -10,10 +11,21 @@ from gramps_webapi.const import PRIMARY_GRAMPS_OBJECTS
 
 
 def test_fix_object_dict_localized_event_type():
-    """Test fix_object_dict with localized (German) event type string."""
+    """Test fix_object_dict with localized (German) event type string.
+
+    This tests the fix for localized type strings (e.g. German "Geburt").
+    Since _S2IMAP is built at module import time based on system locale,
+    we need to manually add the German string to simulate German locale.
+    """
     event_dict = {"_class": "Event", "type": "Geburt"}
-    result = fix_object_dict(event_dict, "Event")
-    assert result["type"]["value"] == 12
+    # Simulate German locale by adding German string to _S2IMAP
+    # _S2IMAP is built at import time; add German string for this test
+    EventType._S2IMAP["Geburt"] = 12
+    try:
+        result = fix_object_dict(event_dict, "Event")
+        assert result["type"]["value"] == 12
+    finally:
+        del EventType._S2IMAP["Geburt"]
 
 
 def test_fix_object_dict_xml_event_type():
