@@ -20,12 +20,18 @@ def test_fix_object_dict_localized_event_type():
     event_dict = {"_class": "Event", "type": "Geburt"}
     # Simulate German locale by adding German string to _S2IMAP
     # _S2IMAP is built at import time; add German string for this test
+    had_geburt = "Geburt" in EventType._S2IMAP
+    old_geburt_value = EventType._S2IMAP.get("Geburt")
     EventType._S2IMAP["Geburt"] = 12
     try:
         result = fix_object_dict(event_dict, "Event")
         assert result["type"]["value"] == 12
     finally:
-        del EventType._S2IMAP["Geburt"]
+        if had_geburt:
+            EventType._S2IMAP["Geburt"] = old_geburt_value
+        else:
+            # Only remove the key if we introduced it
+            EventType._S2IMAP.pop("Geburt", None)
 
 
 def test_fix_object_dict_xml_event_type():
