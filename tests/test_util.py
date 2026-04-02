@@ -6,6 +6,28 @@ from gramps_webapi.const import PRIMARY_GRAMPS_OBJECTS
 
 from unittest.mock import MagicMock, patch
 from gramps_webapi.api.util import send_email
+from gramps_webapi.api.resources.util import fix_object_dict
+
+def test_fix_object_dict_localized_event_type():
+    """Test fix_object_dict with localized (German) event type string."""
+    event_dict = {"_class": "Event", "type": "Geburt"}
+    result = fix_object_dict(event_dict, "Event")
+    assert result["type"]["value"] == 12
+
+
+def test_fix_object_dict_xml_event_type():
+    """Test fix_object_dict with English XML event type string."""
+    event_dict = {"_class": "Event", "type": "Birth"}
+    result = fix_object_dict(event_dict, "Event")
+    assert result["type"]["value"] == 12
+
+
+def test_fix_object_dict_custom_event_type():
+    """Test fix_object_dict with custom event type string."""
+    event_dict = {"_class": "Event", "type": "MyCustomEvent"}
+    result = fix_object_dict(event_dict, "Event")
+    assert result["type"]["value"] == 0
+
 
 def _test_complete_gramps_object_dict(obj_dict):
     util.complete_gramps_object_dict(obj_dict)
